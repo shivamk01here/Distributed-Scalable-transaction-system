@@ -22,6 +22,7 @@ async function runWorker() {
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
+      const traceId = message.headers['x-trace-id']?.toString() || 'unknown';
       const paymentData = JSON.parse(message.value.toString());
       
       try {
@@ -35,20 +36,23 @@ async function runWorker() {
         const cacheKey = `user_tx_${paymentData.userId}`;
         await redisClient.del(cacheKey);
         
-        console.log(`Processed payment for: ${paymentData.userId}`);
+        console.log(`[TRACE: ${traceId}] ✅ Processed payment for: ${paymentData.userId}`);
       } catch (err) {
-        console.error(`Processing Failed for ${paymentData.userId}. Routing to DLQ...`);
+        console.error(`[TRACE: ${traceId}] ❌ Processing Failed for ${paymentData.userId}. Routing to DLQ...`);
         
         await producer.send({
           topic: 'dead-letter-payments',
           messages: [
             { 
               value: message.value.toString(), 
-              headers: { error_reason: err.message } 
+              headers: { 
+                ...message.headers,
+                error_reason: err.message 
+              } 
             }
           ],
         });
-        console.log(`📤 Successfully moved message to DLQ (dead-letter-payments)`);
+        console.log(`[TRACE: ${traceId}] 📤 Successfully moved message to DLQ (dead-letter-payments)`);
       }
     },
   });

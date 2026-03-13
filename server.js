@@ -2,6 +2,7 @@ const express = require('express');
 const { readPool } = require('./db');
 const redis = require('redis');
 const { Kafka } = require('kafkajs');
+const crypto = require('crypto');
 
 const app = express();
 app.use(express.json());
@@ -51,8 +52,9 @@ const producer = kafka.producer();
 app.post('/pay', async (req, res) => {
   const { userId, amount } = req.body;
   const idempotencyKey = req.headers['x-idempotency-key'];
+  const traceId = crypto.randomUUID();
 
-  console.log(`\n[DEBUG] POST /pay hit! Idempotency Key: ${idempotencyKey}`);
+  console.log(`\n[TRACE: ${traceId}] [DEBUG] POST /pay hit! Idempotency Key: ${idempotencyKey}`);
 
   if (!idempotencyKey) {
     console.log('[DEBUG] Blocked: Missing Header');
@@ -80,11 +82,14 @@ app.post('/pay', async (req, res) => {
     await producer.send({
       topic: 'incoming-payments',
       messages: [
-        { value: JSON.stringify({ userId, amount, status: 'PENDING', timestamp: Date.now() }) }
+        { 
+          value: JSON.stringify({ userId, amount, status: 'PENDING', timestamp: Date.now() }),
+          headers: { 'x-trace-id': traceId }
+        }
       ],
     });
 
-    console.log(`Payment sent to Kafka for: ${idempotencyKey}`);
+    console.log(`[TRACE: ${traceId}] Payment sent to Kafka for: ${idempotencyKey}`);
     res.status(202).json({ success: true, message: 'Payment is processing' });
 
   } catch (err) {

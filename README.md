@@ -32,6 +32,11 @@ A high-performance, event-driven payment gateway architecture designed for flash
 - Prevents API abuse and ensures system stability during high-traffic spikes (e.g., flash sales).
 - Configured with a sliding window to provide smooth traffic shaping and immediate protection against brute-force or DDoS-like activity.
 
+### V7: Distributed Tracing (Correlation IDs)
+- Integrated **Correlation IDs** (Trace IDs) using `crypto.randomUUID()` to track requests across distributed boundaries.
+- Trace IDs are injected into Kafka headers at the API Gateway and propagated to the background worker and DLQ.
+- Provides end-to-end observability, allowing developers to debug "Ghost Transactions" by searching for a single ID across logs from multiple services.
+
 ### High Availability & Scale (Final Architecture)
 - **Database Partitioning:** Migrated to `transactions_partitioned` table with range partitioning for optimized indexing and data aging.
 - **Dual Connection Pools:** Implemented `readPool` (max: 50) and `writePool` (max: 20) in `db.js` to prevent connection exhaustion during concurrent flash sale spikes.
