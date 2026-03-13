@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('./db');
 const redis = require('redis');
 const { Kafka } = require('kafkajs');
+const { readPool } = require('./db');
 
 const app = express();
 app.use(express.json());
@@ -51,8 +52,8 @@ app.get('/transactions/:userId', async (req, res) => {
       });
     }
 
-    const result = await pool.query(
-      'SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
+    const result = await readPool.query(
+      'SELECT * FROM transactions_partitioned WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
       [userId]
     );
     

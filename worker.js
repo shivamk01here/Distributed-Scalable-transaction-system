@@ -1,5 +1,5 @@
 const { Kafka } = require('kafkajs');
-const pool = require('./db');
+const { writePool } = require('./db');
 const redis = require('redis');
 
 const redisClient = redis.createClient({ url: 'redis://localhost:6379' });
@@ -23,8 +23,8 @@ async function runWorker() {
       const paymentData = JSON.parse(message.value.toString());
       
       try {
-        await pool.query(
-          'INSERT INTO transactions (user_id, amount, status) VALUES ($1, $2, $3)',
+        await writePool.query(
+          'INSERT INTO transactions_partitioned (user_id, amount, status) VALUES ($1, $2, $3)',
           [paymentData.userId, paymentData.amount, paymentData.status]
         );
         
