@@ -1,29 +1,49 @@
 const express = require('express');
 const pool = require('./db');
 const redis = require('redis');
+const { Kafka } = require('kafkajs');
 
 const app = express();
 app.use(express.json());
 
-// Initialize Redis Client
-const redisClient = redis.createClient({
-  url: 'redis://localhost:6379'
+const redisClient = redis.createClient({ url: 'redis://localhost:6379' });
+redisClient.connect().catch(console.error);
+
+const kafka = new Kafka({
+  clientId: 'payment-gateway',
+  brokers: ['localhost:9092']
+});
+const producer = kafka.producer();
+
+app.post('/pay', async (req, res) => {
+  const { userId, amount } = req.body;
+
+  try {
+    await producer.send({
+      topic: 'incoming-payments',
+      messages: [
+        { value: JSON.stringify({ userId, amount, status: 'PENDING', timestamp: Date.now() }) }
+      ],
+    });
+
+    res.status(202).json({
+      success: true,
+      message: 'Payment is processing'
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to process payment' });
+  }
 });
 
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-redisClient.on('connect', () => console.log('📦 Connected to Redis!'));
-
-// Get transactions for a specific user (V2 with Cache)
 app.get('/transactions/:userId', async (req, res) => {
   const { userId } = req.params;
   const cacheKey = `user_tx_${userId}`;
   
   try {
-    // STEP 1: Check Redis cache first
     const cachedData = await redisClient.get(cacheKey);
     
     if (cachedData) {
-      // CACHE HIT 🎯 - Return immediately, don't touch Postgres
       return res.json({
         success: true,
         source: 'redis',
@@ -31,13 +51,11 @@ app.get('/transactions/:userId', async (req, res) => {
       });
     }
 
-    // STEP 2: CACHE MISS ❌ - Query PostgreSQL
     const result = await pool.query(
       'SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
       [userId]
     );
     
-    // STEP 3: Save to Redis for next time (Expire after 60 seconds)
     await redisClient.setEx(cacheKey, 60, JSON.stringify(result.rows));
     
     res.json({
@@ -53,10 +71,8 @@ app.get('/transactions/:userId', async (req, res) => {
 });
 
 const PORT = 3000;
-
-// Connect to Redis before starting server
-redisClient.connect().then(() => {
+producer.connect().then(() => {
   app.listen(PORT, () => {
-    console.log(`🚀 Gateway V2 (Cached) running on http://localhost:${PORT}`);
+    console.log(` Gateway V3 (Kafka Producer) running on http://localhost:${PORT}`);
   });
 });
