@@ -12,6 +12,36 @@ redisClient.connect()
   .then(() => console.log('Connected to Redis!'))
   .catch(console.error);
 
+const rateLimiter = async (req, res, next) => {
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'local-ip';
+  const redisKey = `rate_limit_${clientIp}`;
+  const MAX_REQUESTS = 5; 
+  const WINDOW_SECONDS = 10; 
+
+  try {
+    const currentRequests = await redisClient.incr(redisKey);
+
+    if (currentRequests === 1) {
+      await redisClient.expire(redisKey, WINDOW_SECONDS);
+    }
+
+    if (currentRequests > MAX_REQUESTS) {
+      console.warn(`Rate limit exceeded for IP: ${clientIp}`);
+      return res.status(429).json({ 
+        success: false, 
+        error: 'Too Many Requests. Please slow down.' 
+      });
+    }
+
+    next(); 
+  } catch (err) {
+    console.error('Redis Rate Limiter failed:', err);
+    next(); 
+  }
+};
+
+app.use(rateLimiter);
+
 const kafka = new Kafka({
   clientId: 'payment-gateway',
   brokers: ['localhost:9092']
@@ -58,7 +88,7 @@ app.post('/pay', async (req, res) => {
     res.status(202).json({ success: true, message: 'Payment is processing' });
 
   } catch (err) {
-    console.error('❌ Server Error:', err);
+    console.error('Server Error:', err);
     res.status(500).json({ error: 'Failed to process payment' });
   }
 });
