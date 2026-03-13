@@ -22,6 +22,11 @@ A high-performance, event-driven payment gateway architecture designed for flash
 - Leveraged Redis `SET NX` for distributed locking to prevent duplicate processing in a multi-instance gateway setup.
 - Guaranteed "Exactly-once" request handling even under rapid retry scenarios.
 
+### V5: Reliable Failure Handling (DLQ)
+- Implemented **Dead Letter Queue (DLQ)** routing in the background worker.
+- Automatically captures failed database writes (e.g., schema violations, transient issues) and routes them to a `dead-letter-payments` topic.
+- Preserves original message data and attaches error reasons in Kafka headers for downstream auditing and manual recovery.
+
 ### High Availability & Scale (Final Architecture)
 - **Database Partitioning:** Migrated to `transactions_partitioned` table with range partitioning for optimized indexing and data aging.
 - **Dual Connection Pools:** Implemented `readPool` (max: 50) and `writePool` (max: 20) in `db.js` to prevent connection exhaustion during concurrent flash sale spikes.

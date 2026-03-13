@@ -1,14 +1,16 @@
 const express = require('express');
-const pool = require('./db');
+const { readPool } = require('./db');
 const redis = require('redis');
 const { Kafka } = require('kafkajs');
-const { readPool } = require('./db');
 
 const app = express();
 app.use(express.json());
 
 const redisClient = redis.createClient({ url: 'redis://localhost:6379' });
-redisClient.connect().catch(console.error);
+redisClient.on('error', (err) => console.error('Redis Error:', err));
+redisClient.connect()
+  .then(() => console.log('Connected to Redis!'))
+  .catch(console.error);
 
 const kafka = new Kafka({
   clientId: 'payment-gateway',
@@ -18,8 +20,33 @@ const producer = kafka.producer();
 
 app.post('/pay', async (req, res) => {
   const { userId, amount } = req.body;
+  const idempotencyKey = req.headers['x-idempotency-key'];
+
+  console.log(`\n[DEBUG] POST /pay hit! Idempotency Key: ${idempotencyKey}`);
+
+  if (!idempotencyKey) {
+    console.log('[DEBUG] Blocked: Missing Header');
+    return res.status(400).json({ error: 'x-idempotency-key header is required' });
+  }
+
+  const redisKey = `idempotency_${idempotencyKey}`;
 
   try {
+    const isNewRequest = await redisClient.set(redisKey, 'LOCKED', {
+      NX: true,
+      EX: 86400 
+    });
+
+    console.log(`[DEBUG] Redis SET NX Result: ${isNewRequest}`);
+
+    if (!isNewRequest) {
+      console.warn(`Blocked duplicate payment for key: ${idempotencyKey}`);
+      return res.status(409).json({
+        success: false,
+        message: 'Duplicate payment request detected. Already processing.'
+      });
+    }
+
     await producer.send({
       topic: 'incoming-payments',
       messages: [
@@ -27,46 +54,24 @@ app.post('/pay', async (req, res) => {
       ],
     });
 
-    res.status(202).json({
-      success: true,
-      message: 'Payment is processing'
-    });
+    console.log(`Payment sent to Kafka for: ${idempotencyKey}`);
+    res.status(202).json({ success: true, message: 'Payment is processing' });
+
   } catch (err) {
-    console.error(err);
+    console.error('❌ Server Error:', err);
     res.status(500).json({ error: 'Failed to process payment' });
   }
 });
 
 app.get('/transactions/:userId', async (req, res) => {
   const { userId } = req.params;
-  const cacheKey = `user_tx_${userId}`;
-  
   try {
-    const cachedData = await redisClient.get(cacheKey);
-    
-    if (cachedData) {
-      return res.json({
-        success: true,
-        source: 'redis',
-        data: JSON.parse(cachedData)
-      });
-    }
-
     const result = await readPool.query(
       'SELECT * FROM transactions_partitioned WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20',
       [userId]
     );
-    
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(result.rows));
-    
-    res.json({
-      success: true,
-      source: 'postgres',
-      count: result.rowCount,
-      data: result.rows
-    });
+    res.json({ success: true, count: result.rowCount, data: result.rows });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -74,6 +79,6 @@ app.get('/transactions/:userId', async (req, res) => {
 const PORT = 3000;
 producer.connect().then(() => {
   app.listen(PORT, () => {
-    console.log(` Gateway V3 (Kafka Producer) running on http://localhost:${PORT}`);
+    console.log(`Gateway V4 (Idempotent API) running on http://localhost:${PORT}`);
   });
 });

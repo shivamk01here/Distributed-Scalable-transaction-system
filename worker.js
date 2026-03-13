@@ -11,29 +11,44 @@ const kafka = new Kafka({
 });
 
 const consumer = kafka.consumer({ groupId: 'payment-db-writers' });
+const producer = kafka.producer(); 
 
 async function runWorker() {
+  await producer.connect();
   await consumer.connect();
   await consumer.subscribe({ topic: 'incoming-payments', fromBeginning: true });
 
-  console.log('Worker started. Listening for payments & managing cache...');
+  console.log('👷 Worker started. Listening for payments & managing cache...');
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
       const paymentData = JSON.parse(message.value.toString());
       
       try {
+        // 1. Save to Database
         await writePool.query(
           'INSERT INTO transactions_partitioned (user_id, amount, status) VALUES ($1, $2, $3)',
           [paymentData.userId, paymentData.amount, paymentData.status]
         );
         
+        // 2. Clear cache on success
         const cacheKey = `user_tx_${paymentData.userId}`;
         await redisClient.del(cacheKey);
         
-        console.log(`Processed payment & cleared cache for: ${paymentData.userId}`);
+        console.log(`Processed payment for: ${paymentData.userId}`);
       } catch (err) {
-        console.error('Processing Failed:', err);
+        console.error(`Processing Failed for ${paymentData.userId}. Routing to DLQ...`);
+        
+        await producer.send({
+          topic: 'dead-letter-payments',
+          messages: [
+            { 
+              value: message.value.toString(), 
+              headers: { error_reason: err.message } 
+            }
+          ],
+        });
+        console.log(`📤 Successfully moved message to DLQ (dead-letter-payments)`);
       }
     },
   });
