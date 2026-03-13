@@ -17,6 +17,16 @@ A high-performance, event-driven payment gateway architecture designed for flash
 - Added a background **Worker** to process payments from the queue.
 - Implemented **Write-Behind Caching** with cache invalidation in the worker to ensure data consistency.
 
+### V4: Distributed Idempotency (Redis)
+- Implemented `x-idempotency-key` enforcement for all payment requests.
+- Leveraged Redis `SET NX` for distributed locking to prevent duplicate processing in a multi-instance gateway setup.
+- Guaranteed "Exactly-once" request handling even under rapid retry scenarios.
+
+### High Availability & Scale (Final Architecture)
+- **Database Partitioning:** Migrated to `transactions_partitioned` table with range partitioning for optimized indexing and data aging.
+- **Dual Connection Pools:** Implemented `readPool` (max: 50) and `writePool` (max: 20) in `db.js` to prevent connection exhaustion during concurrent flash sale spikes.
+- **Load Balancing:** Gateway API now prioritizes `readPool` for transaction history and `writePool` for critical persistence tasks.
+
 ## Tech Stack
 - **Runtime:** Node.js
 - **Database:** PostgreSQL
